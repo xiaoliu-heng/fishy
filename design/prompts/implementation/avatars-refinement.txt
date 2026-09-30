@@ -1,0 +1,8 @@
+Use case: precise-object-edit
+Asset type: production transparent 3-column by 2-row avatar sprite sheet.
+Edit target: [local-generated-reference.png]
+Change ONLY the backgrounds outside the six circles and the circle placement/size. Keep all six existing characters, expressions, hair, clothes, exact drawing style, colors, printed texture, face shapes, and reading order. Do not redraw their identities.
+Remove absolutely every gray, beige, white, green, coral, soft-focus, gradient, glow, halo, shadow, or other pixel outside the six circular token rims; replace it with actual transparent alpha. Keep the off-white circular rims and white dog fur fully opaque. No shadows, no glows, no backdrop; this is a clean isolated sprite sheet.
+Rebuild the layout at exactly 1536x1024 pixels with six invisible 512x512 cells, three columns and two rows. Every token is one equal 400-pixel diameter circle. Circle centers are exactly (256,256), (768,256), (1280,256), (256,768), (768,768), and (1280,768). Equal clear transparent gutters, no circle touching any cell edge. Tokens are perfectly frontal without tilt.
+Character order unchanged: glasses man, bob haircut woman, curly-haired man, long-haired woman, teal-cap person, fluffy white dog.
+No text, letters, names, grid, selection ring, symbols, extra objects, checkerboard, or rectangular opaque layer. Output a real PNG with alpha. Preserve the interior artwork of each token.

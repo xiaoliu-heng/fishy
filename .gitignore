@@ -1,0 +1,38 @@
+# Dependencies and generated builds
+node_modules/
+dist/
+
+# Runtime identities, room content, backups and local deployment state
+.data/
+data/
+tmp/
+backups/
+releases/
+*.bak
+*.log
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+
+# Environment and credential files; publish examples only
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+.npmrc
+.ssh/
+
+# Local design workflow state, browser screenshots and test evidence
+.impeccable/
+test-results/
+playwright-report/
+coverage/
+
+# Machine-specific overrides
+*.local.*
+.DS_Store

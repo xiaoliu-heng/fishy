@@ -1,0 +1,6 @@
+# Keep generated visual assets byte-identical across platforms.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.pdf binary

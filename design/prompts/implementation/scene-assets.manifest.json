@@ -1,0 +1,133 @@
+{
+  "production_spec": ".impeccable/build/scene-rebuild.md",
+  "generator": "built-in image_gen.imagegen",
+  "visual_acceptance": "accepted",
+  "gate_score": "unscored",
+  "inspection": "Native PNG alpha composited on cool-white and pine; clean cream edges and empty coral center verified. Card material has alpha 252-254 from native output; preserved without postprocessing.",
+  "inspection_image": "design/prompts/implementation/scene-alpha-check.png",
+  "bounds_convention": "left, top, right-exclusive, bottom-exclusive; subject threshold alpha >= 250",
+  "assets": [
+    {
+      "id": "table-scene",
+      "path": "public/assets/scenes/table-scene.png",
+      "width": 1254,
+      "height": 1254,
+      "mode": "RGB",
+      "native_alpha": false,
+      "alpha_range": null,
+      "alpha_bounds": [
+        0,
+        0,
+        1254,
+        1254
+      ],
+      "subject_bounds": [
+        0,
+        0,
+        1254,
+        1254
+      ],
+      "original_generated_file": "[local-generated-reference.png]",
+      "prompt_file": "design/prompts/implementation/table-scene.txt",
+      "exact_prompt_embedded": false,
+      "sha256": "c01efcb271af747b40415db5bc8151d993ca262a005ab55e441c92199af66e10",
+      "visual_acceptance": "accepted",
+      "gate_score": "unscored",
+      "published_prompt_embedded": true
+    },
+    {
+      "id": "card-secret",
+      "path": "public/assets/scenes/card-secret.png",
+      "width": 1024,
+      "height": 1536,
+      "mode": "RGBA",
+      "native_alpha": true,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "alpha_bounds": [
+        0,
+        30,
+        992,
+        1512
+      ],
+      "subject_bounds": [
+        53,
+        97,
+        975,
+        1434
+      ],
+      "original_generated_file": "[local-generated-reference.png]",
+      "prompt_file": "design/prompts/implementation/card-secret.txt",
+      "exact_prompt_embedded": false,
+      "sha256": "a580cc1c003d05978a321442269296ce7d840d2bd66a8691f8743eb1638ad595",
+      "visual_acceptance": "accepted",
+      "gate_score": "unscored",
+      "published_prompt_embedded": true
+    },
+    {
+      "id": "card-taboo",
+      "path": "public/assets/scenes/card-taboo.png",
+      "width": 1024,
+      "height": 1536,
+      "mode": "RGBA",
+      "native_alpha": true,
+      "alpha_range": [
+        0,
+        254
+      ],
+      "alpha_bounds": [
+        0,
+        0,
+        980,
+        1512
+      ],
+      "subject_bounds": [
+        55,
+        96,
+        974,
+        1434
+      ],
+      "original_generated_file": "[local-generated-reference.png]",
+      "prompt_file": "design/prompts/implementation/card-taboo.txt",
+      "exact_prompt_embedded": false,
+      "sha256": "d120ccb83e28254b1b3f241fb481c088a0dbe8d9bb2ec37f027c976005b3c1e2",
+      "visual_acceptance": "accepted",
+      "gate_score": "unscored",
+      "published_prompt_embedded": true
+    },
+    {
+      "id": "seal",
+      "path": "public/assets/scenes/seal.png",
+      "width": 1254,
+      "height": 1254,
+      "mode": "RGBA",
+      "native_alpha": true,
+      "alpha_range": [
+        0,
+        255
+      ],
+      "alpha_bounds": [
+        65,
+        63,
+        1190,
+        1190
+      ],
+      "subject_bounds": [
+        74,
+        68,
+        1180,
+        1185
+      ],
+      "original_generated_file": "[local-generated-reference.png]",
+      "prompt_file": "design/prompts/implementation/seal.txt",
+      "exact_prompt_embedded": false,
+      "sha256": "2b2d2e4d791c346ac19d94ea0b0c4658cffd75142389d80d06beaef0af7e9c6a",
+      "visual_acceptance": "accepted",
+      "gate_score": "unscored",
+      "published_prompt_embedded": true
+    }
+  ],
+  "publication_privacy": "Local account paths removed from published prompts and PNG text metadata. Original prompts and images retained in ignored local backup; image pixel chunks are byte-identical."
+}
