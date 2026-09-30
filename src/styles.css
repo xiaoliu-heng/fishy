@@ -637,6 +637,22 @@ button:disabled {
   opacity: 0.55;
   cursor: default;
 }
+.remix-setting > svg,
+.remix-note > svg {
+  flex-shrink: 0;
+}
+.remix-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.65;
+  margin: 16px 0;
+}
+.remix-note > svg {
+  margin-top: 3px;
+}
 /* The cards are real interactive objects, with an immediate concealed state. */
 .card-back {
   width: 152px;

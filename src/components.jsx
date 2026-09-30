@@ -10,6 +10,7 @@ import {
   ArrowRight,
   X,
   BookOpen,
+  Shuffle,
 } from "lucide-react";
 import { Logo } from "./Logo.jsx";
 import { saved } from "./useGame.js";
@@ -223,7 +224,31 @@ export function ModePicker({ value, onChange }) {
     </fieldset>
   );
 }
-export function Rules() {
+export function RemixSetting({ value, onChange, disabled, tabooOnly = false }) {
+  return (
+    <label className="switch-row remix-setting">
+      <Shuffle aria-hidden="true" />
+      <span>
+        <strong>条件与后果随机重组</strong>
+        <small>
+          {tabooOnly
+            ? "仅对秘密任务生效，本局隐藏禁忌不受影响"
+            : "秘密任务的条件、后果分别抽取，内置题也参与"}
+        </small>
+      </span>
+      <input
+        type="checkbox"
+        role="switch"
+        aria-label="条件与后果随机重组"
+        className="switch"
+        checked={value}
+        disabled={disabled || tabooOnly}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+    </label>
+  );
+}
+export function Rules({ room }) {
   return (
     <div className="rules">
       <div className="rule secret">
@@ -242,6 +267,19 @@ export function Rules() {
             大家都知道，只有你不知道。你的行为触发禁忌后，接受大家现场约定的惩罚。
           </p>
           <p className="rule-foot">自己猜中后，让另一位玩家确认解除。</p>
+        </div>
+      </div>
+      <div className="rule secret">
+        <Shuffle />
+        <div>
+          <h3>
+            条件与后果随机重组
+            {room ? ` · ${room.remixSecrets ? "已开启" : "未开启"}` : ""}
+          </h3>
+          <p>
+            开启后，秘密任务的条件和后果分别抽取，组合成新题；启用的内置题也参与，原配对不会发出。
+          </p>
+          <p className="rule-foot">隐藏禁忌保持原规则。房主可在开局前修改。</p>
         </div>
       </div>
       <p className="muted">
@@ -293,7 +331,8 @@ export function EntryForm({ kind, code, busy, error, back, enter }) {
     [avatar, setAvatar] = useState(Number(saved.get("avatar", "0"))),
     [roomCode, setCode] = useState(code || "");
   const [mode, setMode] = useState("mixed"),
-    [builtins, setBuiltins] = useState(true);
+    [builtins, setBuiltins] = useState(true),
+    [remixSecrets, setRemixSecrets] = useState(false);
   const isJoin = kind === "join";
   return (
     <main className="app-shell screen">
@@ -322,6 +361,7 @@ export function EntryForm({ kind, code, busy, error, back, enter }) {
             avatar,
             mode,
             builtins,
+            remixSecrets,
             code: roomCode.replace(/\s/g, ""),
           });
         }}
@@ -380,6 +420,14 @@ export function EntryForm({ kind, code, busy, error, back, enter }) {
               onChange={(e) => setBuiltins(e.target.checked)}
             />
           </label>
+        )}
+        {!isJoin && (
+          <RemixSetting
+            value={remixSecrets}
+            onChange={setRemixSecrets}
+            disabled={busy}
+            tabooOnly={mode === "taboo"}
+          />
         )}
         <Alert text={error} />
         <Button disabled={busy} type="submit" className="full">

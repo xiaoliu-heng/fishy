@@ -84,6 +84,90 @@ export function assign(players, pool, type) {
   );
 }
 
+const fragmentKey = (text) =>
+  text
+    .normalize("NFKC")
+    .replace(/[\p{P}\p{Z}\s]/gu, "")
+    .toLowerCase();
+
+// A capacity-limited matching uses each submitted fragment at most once.
+// Pair edges have capacity 1: repeated wording cannot produce duplicate cards.
+// Reverse edges let the search repair an earlier choice instead of retrying randomly.
+export function remixSecrets(pool, count) {
+  const tasks = pool.filter((task) => task.type === "secret");
+  const issue =
+    "条件或后果不足以重组出每人一张新题。请补充不同的条件和后果、开启内置题库，或关闭随机重组。";
+  assert(tasks.length >= count, issue);
+  const groups = (field) => {
+    const result = new Map();
+    for (const task of shuffled(tasks)) {
+      const key = fragmentKey(task[field]);
+      if (!result.has(key)) result.set(key, { key, fragments: [] });
+      result.get(key).fragments.push(task[field]);
+    }
+    return shuffled([...result.values()]);
+  };
+  const triggers = groups("trigger"),
+    actions = groups("action");
+  const originals = new Set(
+    tasks.map((task) =>
+      JSON.stringify([fragmentKey(task.trigger), fragmentKey(task.action)]),
+    ),
+  );
+  const actionOffset = 1 + triggers.length;
+  const sink = actionOffset + actions.length;
+  const graph = Array.from({ length: sink + 1 }, () => []);
+  const connect = (from, to, capacity) => {
+    const edge = { to, capacity, reverse: graph[to].length };
+    graph[from].push(edge);
+    graph[to].push({ to: from, capacity: 0, reverse: graph[from].length - 1 });
+    return edge;
+  };
+  triggers.forEach((group, i) => connect(0, i + 1, group.fragments.length));
+  actions.forEach((group, i) =>
+    connect(actionOffset + i, sink, group.fragments.length),
+  );
+  const pairs = [];
+  triggers.forEach((trigger, i) => {
+    actions.forEach((action, j) => {
+      if (!originals.has(JSON.stringify([trigger.key, action.key])))
+        pairs.push({
+          trigger,
+          action,
+          edge: connect(i + 1, actionOffset + j, 1),
+        });
+    });
+  });
+  for (let dealt = 0; dealt < count; dealt++) {
+    const previous = new Map([[0, null]]),
+      queue = [0];
+    for (let i = 0; i < queue.length && !previous.has(sink); i++) {
+      const from = queue[i];
+      for (const edge of graph[from]) {
+        if (edge.capacity && !previous.has(edge.to)) {
+          previous.set(edge.to, { from, edge });
+          queue.push(edge.to);
+        }
+      }
+    }
+    assert(previous.has(sink), issue);
+    for (let node = sink; node !== 0;) {
+      const { from, edge } = previous.get(node);
+      edge.capacity--;
+      graph[node][edge.reverse].capacity++;
+      node = from;
+    }
+  }
+  return pairs
+    .filter(({ edge }) => edge.capacity === 0)
+    .map(({ trigger, action }) => ({
+      id: randomUUID(),
+      type: "secret",
+      trigger: trigger.fragments.pop(),
+      action: action.fragments.pop(),
+    }));
+}
+
 export class GameStore {
   constructor(path = null) {
     this.path = path;
@@ -149,6 +233,11 @@ export class GameStore {
     const details = profile(input);
     assert(modes.includes(input.mode), "请选择玩法");
     assert(typeof input.builtins === "boolean", "请选择题库来源");
+    assert(
+      input.remixSecrets === undefined ||
+        typeof input.remixSecrets === "boolean",
+      "请选择是否随机重组",
+    );
     assert(this.rooms.size < 1000, "房间已满，请稍后再试。", 503);
     let code;
     do {
@@ -160,6 +249,7 @@ export class GameStore {
       code,
       mode: input.mode,
       builtins: input.builtins,
+      remixSecrets: input.remixSecrets ?? false,
       status: "lobby",
       round: 1,
       version: 0,
@@ -219,14 +309,26 @@ export class GameStore {
   pool(room) {
     return [...(room.builtins ? BUILTINS : []), ...room.tasks];
   }
-  startIssue(room) {
+  planRound(room) {
     const players = room.players.filter((p) => !p.left);
-    if (players.length < 2) return "再邀请 1 位朋友，就能开局了";
+    assert(players.length >= 2, "再邀请 1 位朋友，就能开局了");
     const missing = players.filter((p) => !p.ready).length;
-    if (missing) return `还有 ${missing} 位玩家没有准备`;
+    assert(!missing, `还有 ${missing} 位玩家没有准备`);
+    const pool = this.pool(room);
+    const assignments = Object.fromEntries(players.map((p) => [p.id, {}]));
+    for (const type of typesFor(room.mode)) {
+      const cards =
+        type === "secret" && room.remixSecrets
+          ? remixSecrets(pool, players.length)
+          : pool;
+      const assigned = assign(players, cards, type);
+      for (const p of players) assignments[p.id][type] = assigned[p.id];
+    }
+    return assignments;
+  }
+  startIssue(room) {
     try {
-      for (const type of typesFor(room.mode))
-        assign(players, this.pool(room), type);
+      this.planRound(room);
     } catch (e) {
       return e.message;
     }
@@ -260,6 +362,10 @@ export class GameStore {
         if (input.builtins !== undefined) {
           assert(typeof input.builtins === "boolean", "题库来源无效");
           room.builtins = input.builtins;
+        }
+        if (input.remixSecrets !== undefined) {
+          assert(typeof input.remixSecrets === "boolean", "随机重组设置无效");
+          room.remixSecrets = input.remixSecrets;
         }
         unready();
         break;
@@ -306,15 +412,7 @@ export class GameStore {
       case "start": {
         host();
         lobby();
-        const issue = this.startIssue(room);
-        assert(!issue, issue);
-        const players = room.players.filter((p) => !p.left);
-        room.assignments = Object.fromEntries(players.map((p) => [p.id, {}]));
-        for (const type of typesFor(room.mode)) {
-          const assigned = assign(players, this.pool(room), type);
-          for (const p of players)
-            room.assignments[p.id][type] = assigned[p.id];
-        }
+        room.assignments = this.planRound(room);
         room.status = "playing";
         room.startedAt = Date.now();
         break;
@@ -384,6 +482,7 @@ export class GameStore {
       version: room.version,
       mode: room.mode,
       builtins: room.builtins,
+      remixSecrets: room.remixSecrets ?? false,
       hostId: room.hostId,
       meId: viewerId,
       players: room.players

@@ -12,6 +12,7 @@ import {
   BookOpen,
   LogOut,
   WifiOff,
+  Settings2,
 } from "lucide-react";
 import { Logo } from "./Logo.jsx";
 import { saved, useGame } from "./useGame.js";
@@ -21,6 +22,7 @@ import {
   Alert,
   Modal,
   ModePicker,
+  RemixSetting,
   Rules,
   Deck,
   Entry,
@@ -319,7 +321,7 @@ export default function App() {
       )}
       {modal && (room || modal.type === "rules") && (
         <Modal title={TITLES[modal.type]} close={close} error={error}>
-          {modal.type === "rules" && <Rules />}
+          {modal.type === "rules" && <Rules room={room} />}
           {modal.type === "invite" && (
             <Invite room={room} networkUrls={networkUrls} toast={toast} />
           )}
@@ -335,6 +337,13 @@ export default function App() {
                 游戏规则
                 <ChevronRight />
               </button>
+              {host && room.status === "lobby" && (
+                <button onClick={() => show("settings")}>
+                  <Settings2 />
+                  房间设置
+                  <ChevronRight />
+                </button>
+              )}
               {room.status === "lobby" && (
                 <button onClick={() => show("invite")}>
                   <Share2 />
@@ -367,7 +376,18 @@ export default function App() {
                   }
                 }}
               />
-              <p className="form-note">修改玩法后，大家需要重新准备。</p>
+              <RemixSetting
+                value={room.remixSecrets}
+                disabled={busy}
+                tabooOnly={room.mode === "taboo"}
+                onChange={async (remixSecrets) => {
+                  if (await act("settings", { remixSecrets }))
+                    toast("规则已更新，请大家重新准备");
+                }}
+              />
+              <p className="form-note">
+                修改玩法或重组规则后，大家需要重新准备。
+              </p>
             </>
           )}
           {modal.type === "members" && (

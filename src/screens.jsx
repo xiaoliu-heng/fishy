@@ -21,6 +21,7 @@ import {
   ArrowRight,
   ShieldCheck,
   HelpCircle,
+  Shuffle,
 } from "lucide-react";
 import QRCode from "qrcode";
 import {
@@ -113,6 +114,12 @@ export function Lobby({ room, busy, act, show, navigate }) {
         <small>{room.players.length} / 12 人</small>
         <ChevronRight />
       </button>
+      {room.remixSecrets && room.mode !== "taboo" && (
+        <p className="remix-note">
+          <Shuffle size={18} />
+          条件与后果随机重组已开启
+        </p>
+      )}
       <div className="pool-counts">
         {["secret", "taboo"]
           .filter((t) => room.mode === "mixed" || room.mode === t)
@@ -212,6 +219,12 @@ export function Pool({ room, busy, act, edit, navigate, show }) {
         <span>朋友投稿</span>
         <b>{room.submittedCount} 道</b>
       </div>
+      {room.remixSecrets && room.mode !== "taboo" && (
+        <p className="remix-note">
+          <Shuffle size={18} />
+          秘密任务将分别抽取条件和后果，下面是你的投稿素材。
+        </p>
+      )}
       <h2 className="section-heading">
         我的投稿 <Pencil size={20} />
       </h2>
@@ -221,10 +234,17 @@ export function Pool({ room, busy, act, edit, navigate, show }) {
             <KindIcon type={task.type} />
             <div>
               <small>{MODE[task.type]}</small>
-              <p>
-                {task.trigger}
-                {task.action && <> → {task.action}</>}
-              </p>
+              {room.remixSecrets && task.type === "secret" ? (
+                <>
+                  <p>条件：{task.trigger}</p>
+                  <p>后果：{task.action}</p>
+                </>
+              ) : (
+                <p>
+                  {task.trigger}
+                  {task.action && <> → {task.action}</>}
+                </p>
+              )}
             </div>
             <button
               className="icon-btn"
@@ -274,15 +294,20 @@ export function Submit({ room, task, busy, act, done }) {
     [action, setAction] = useState(task?.action || ""),
     [sent, setSent] = useState(false);
   const timer = useRef(null);
+  const remix = room.remixSecrets && type === "secret";
   useEffect(() => () => clearTimeout(timer.current), []);
   return (
     <>
       <Heading>
-        {task
-          ? "编辑这道题"
-          : type === "secret"
-            ? "出一道秘密任务"
-            : "出一道隐藏禁忌"}
+        {remix
+          ? task
+            ? "编辑条件和后果"
+            : "提供条件和后果"
+          : task
+            ? "编辑这道题"
+            : type === "secret"
+              ? "出一道秘密任务"
+              : "出一道隐藏禁忌"}
       </Heading>
       <form
         onSubmit={async (e) => {
@@ -307,9 +332,15 @@ export function Submit({ room, task, busy, act, done }) {
             </button>
           ))}
         </div>
+        {remix && (
+          <p className="remix-note">
+            <Shuffle size={18} />
+            分别写下一个条件和一个后果。系统会重新配对，不会按这里的组合发牌。
+          </p>
+        )}
         <div className="fields">
           <label>
-            {type === "secret" ? "当……" : "当本人……"}
+            {remix ? "触发条件" : type === "secret" ? "当……" : "当本人……"}
             <textarea
               placeholder={
                 type === "secret"
@@ -326,7 +357,7 @@ export function Submit({ room, task, busy, act, done }) {
           </label>
           {type === "secret" && (
             <label>
-              你就……
+              {remix ? "执行后果" : "你就……"}
               <textarea
                 placeholder="例如：摆一个超级英雄的姿势"
                 required
@@ -350,10 +381,14 @@ export function Submit({ room, task, busy, act, done }) {
           <div className={`task-preview ${type} ${sent ? "submitted" : ""}`}>
             <div className="preview-title">
               <KindIcon type={type} />
-              <h2>{MODE[type]}</h2>
+              <h2>{remix ? "条件与后果" : MODE[type]}</h2>
             </div>
             <small>
-              {type === "secret" ? "只有抽到的人知道" : "抽到的人暂时不知道"}
+              {remix
+                ? "分别入池，开局随机重组"
+                : type === "secret"
+                  ? "只有抽到的人知道"
+                  : "抽到的人暂时不知道"}
             </small>
             <div className="preview-paper">
               <span>{type === "secret" ? "触发条件" : "当本人"}</span>
@@ -361,7 +396,7 @@ export function Submit({ room, task, busy, act, done }) {
               {type === "secret" && (
                 <>
                   <hr />
-                  <span>执行动作</span>
+                  <span>{remix ? "执行后果" : "执行动作"}</span>
                   <p>{action || "会发生什么好戏？"}</p>
                 </>
               )}

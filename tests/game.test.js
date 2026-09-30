@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { GameStore, assign } from "../server/game.js";
+import { GameStore, assign, remixSecrets } from "../server/game.js";
 import { createApp } from "../server/index.js";
 
 const input = (name = "阿宁", mode = "mixed", builtins = true) => ({
@@ -27,6 +27,217 @@ function setup(mode = "mixed", builtins = true, path = null) {
       ),
   };
 }
+
+const secret = (id, trigger, action) => ({
+  id,
+  type: "secret",
+  trigger,
+  action,
+});
+const pair = (task) => JSON.stringify([task.trigger, task.action]);
+
+test("remixing uses different original pairs and does not reuse fragments or mutate the pool", () => {
+  const pool = [
+    secret("a", "有人举起杯子", "拍三下手"),
+    secret("b", "有人站起来", "眨两下眼"),
+  ];
+  const original = structuredClone(pool);
+  for (let round = 0; round < 20; round++) {
+    const cards = remixSecrets(pool, 2);
+    assert.deepEqual(
+      new Set(cards.map(pair)),
+      new Set([
+        pair(secret("", pool[0].trigger, pool[1].action)),
+        pair(secret("", pool[1].trigger, pool[0].action)),
+      ]),
+    );
+    assert.equal(new Set(cards.map((card) => card.id)).size, 2);
+  }
+  assert.deepEqual(pool, original);
+});
+
+test("duplicate wording cannot bypass original-pair avoidance or produce duplicate new cards", () => {
+  const pool = [
+    secret("a", "甲", "一"),
+    secret("b", "甲！", "二"),
+    secret("c", "乙", "一"),
+    secret("d", "乙", "三"),
+    secret("e", "丙", "二"),
+    secret("f", "丙", "三"),
+  ];
+  const normalize = (task) =>
+    JSON.stringify([task.trigger.replace("！", ""), task.action]);
+  const cards = remixSecrets(pool, 3);
+  assert.deepEqual(
+    new Set(cards.map(normalize)),
+    new Set(['["甲","三"]', '["乙","二"]', '["丙","一"]']),
+  );
+  assert.throws(() => remixSecrets(pool, 4), /不足以重组/);
+  assert.throws(
+    () =>
+      remixSecrets(
+        [secret("x", "条件甲", "同一后果"), secret("y", "条件乙", "同一后果")],
+        2,
+      ),
+    /不足以重组/,
+  );
+});
+
+test("remix setting is opt-in, host-only, resets readiness and cannot change during a round", () => {
+  const { store, host, peer, code, ready } = setup();
+  assert.equal(store.snapshot(code, peer.playerId).remixSecrets, false);
+  assert.throws(
+    () => store.create({ ...input("无效"), remixSecrets: "true" }),
+    /随机重组/,
+  );
+  assert.throws(
+    () => store.act(code, peer.playerId, "settings", { remixSecrets: true }),
+    /房主/,
+  );
+  assert.throws(
+    () => store.act(code, host.playerId, "settings", { remixSecrets: 1 }),
+    /重组设置/,
+  );
+  ready();
+  store.act(code, host.playerId, "settings", { remixSecrets: true });
+  assert.ok(store.get(code).players.every((player) => !player.ready));
+  assert.equal(store.snapshot(code, peer.playerId).remixSecrets, true);
+  ready();
+  store.act(code, host.playerId, "start");
+  assert.throws(
+    () => store.act(code, host.playerId, "settings", { remixSecrets: false }),
+    /已经开始/,
+  );
+  const originals = new Set(
+    store
+      .pool(store.get(code))
+      .filter((task) => task.type === "secret")
+      .map(pair),
+  );
+  for (const player of [host, peer]) {
+    const snapshot = store.snapshot(code, player.playerId);
+    assert.ok(!originals.has(pair(snapshot.hand.secret)));
+    assert.equal(snapshot.hand.taboo.task, null);
+    assert.ok(snapshot.others.every((other) => other.secret === undefined));
+    assert.deepEqual(Object.keys(snapshot.hand.secret).sort(), [
+      "action",
+      "trigger",
+      "type",
+    ]);
+  }
+});
+
+test("an impossible remix leaves the room untouched and disabling it restores original dealing", () => {
+  const { store, host, peer, code, ready } = setup("secret", false);
+  for (const [client, trigger] of [
+    [host, "有人点头两次"],
+    [peer, "有人摇头两次"],
+  ])
+    store.act(code, client.playerId, "task", {
+      type: "secret",
+      trigger,
+      action: "说出同一条台词",
+    });
+  store.act(code, host.playerId, "settings", { remixSecrets: true });
+  ready();
+  const before = structuredClone(store.get(code));
+  assert.match(store.snapshot(code, host.playerId).startIssue, /不足以重组/);
+  assert.throws(() => store.act(code, host.playerId, "start"), /不足以重组/);
+  assert.deepEqual(store.get(code), before);
+  store.act(code, host.playerId, "settings", { remixSecrets: false });
+  ready();
+  store.act(code, host.playerId, "start");
+  const originals = new Set(before.tasks.map(pair));
+  assert.ok(
+    Object.values(store.get(code).assignments).every((hand) =>
+      originals.has(pair(hand.secret)),
+    ),
+  );
+});
+
+test("remix does not change taboo-only games or author avoidance", () => {
+  const { store, host, peer, code, ready } = setup("taboo", false);
+  for (const [client, trigger] of [
+    [host, "同时握住两支笔"],
+    [peer, "同时举起两只手"],
+  ])
+    store.act(code, client.playerId, "task", { type: "taboo", trigger });
+  store.act(code, host.playerId, "settings", { remixSecrets: true });
+  ready();
+  store.act(code, host.playerId, "start");
+  for (const client of [host, peer]) {
+    const hand = store.get(code).assignments[client.playerId];
+    assert.deepEqual(Object.keys(hand), ["taboo"]);
+    assert.notEqual(hand.taboo.authorId, client.playerId);
+    assert.equal(store.snapshot(code, client.playerId).hand.taboo.task, null);
+  }
+});
+
+test("a full mixed room remixes enabled built-ins and submitted components together", () => {
+  const store = new GameStore(),
+    host = store.create({ ...input("玩家1"), remixSecrets: true });
+  const code = host.room.code,
+    clients = [host];
+  for (let i = 2; i <= 12; i++)
+    clients.push(store.join(code, input(`玩家${i}`)));
+  store.act(code, host.playerId, "task", {
+    type: "secret",
+    trigger: "有人提起第十三个故事",
+    action: "对着天花板挥一次手",
+  });
+  const pool = store
+    .pool(store.get(code))
+    .filter((task) => task.type === "secret");
+  for (const client of clients)
+    store.act(code, client.playerId, "ready", { ready: true });
+  store.act(code, host.playerId, "start");
+  const secrets = Object.values(store.get(code).assignments).map(
+    (hand) => hand.secret,
+  );
+  assert.equal(secrets.length, 12);
+  assert.equal(new Set(secrets.map(pair)).size, 12);
+  for (const task of secrets) {
+    assert.ok(!pool.some((original) => pair(original) === pair(task)));
+    assert.ok(pool.some((original) => original.trigger === task.trigger));
+    assert.ok(pool.some((original) => original.action === task.action));
+  }
+  for (const field of ["trigger", "action"]) {
+    const counts = (cards, value) =>
+      cards.filter((card) => card[field] === value).length;
+    assert.ok(
+      secrets.every(
+        (card) => counts(secrets, card[field]) <= counts(pool, card[field]),
+      ),
+    );
+  }
+});
+
+test("remix setting and actual new pairs survive reload; old room files default to off", () => {
+  const dir = mkdtempSync(join(tmpdir(), "partygame-remix-"));
+  try {
+    const path = join(dir, "rooms.json");
+    const { store, host, code, ready } = setup("secret", true, path);
+    store.act(code, host.playerId, "settings", { remixSecrets: true });
+    ready();
+    store.act(code, host.playerId, "start");
+    let restored = new GameStore(path);
+    assert.deepEqual(
+      restored.snapshot(code, host.playerId),
+      store.snapshot(code, host.playerId),
+    );
+    const data = JSON.parse(readFileSync(path));
+    delete data.rooms[0].remixSecrets;
+    writeFileSync(path, JSON.stringify(data));
+    restored = new GameStore(path);
+    assert.equal(restored.snapshot(code, host.playerId).remixSecrets, false);
+    assert.deepEqual(
+      restored.get(code).assignments,
+      store.get(code).assignments,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("mixed mode hides own taboo and every other secret, including from host; guesses keep secret alive", () => {
   const { store, host, peer, code, ready } = setup();
