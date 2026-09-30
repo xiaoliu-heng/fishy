@@ -35,6 +35,13 @@ const secret = (id, trigger, action) => ({
   action,
 });
 const pair = (task) => JSON.stringify([task.trigger, task.action]);
+const drawRemixed = (pool, count) =>
+  Object.values(
+    remixSecrets(
+      Array.from({ length: count }, (_, i) => ({ id: `player-${i}` })),
+      pool,
+    ),
+  );
 
 test("remixing uses different original pairs and does not reuse fragments or mutate the pool", () => {
   const pool = [
@@ -43,7 +50,7 @@ test("remixing uses different original pairs and does not reuse fragments or mut
   ];
   const original = structuredClone(pool);
   for (let round = 0; round < 20; round++) {
-    const cards = remixSecrets(pool, 2);
+    const cards = drawRemixed(pool, 2);
     assert.deepEqual(
       new Set(cards.map(pair)),
       new Set([
@@ -67,15 +74,15 @@ test("duplicate wording cannot bypass original-pair avoidance or produce duplica
   ];
   const normalize = (task) =>
     JSON.stringify([task.trigger.replace("！", ""), task.action]);
-  const cards = remixSecrets(pool, 3);
+  const cards = drawRemixed(pool, 3);
   assert.deepEqual(
     new Set(cards.map(normalize)),
     new Set(['["甲","三"]', '["乙","二"]', '["丙","一"]']),
   );
-  assert.throws(() => remixSecrets(pool, 4), /不足以重组/);
+  assert.throws(() => drawRemixed(pool, 4), /不足以重组/);
   assert.throws(
     () =>
-      remixSecrets(
+      drawRemixed(
         [secret("x", "条件甲", "同一后果"), secret("y", "条件乙", "同一后果")],
         2,
       ),
@@ -185,6 +192,12 @@ test("a full mixed room remixes enabled built-ins and submitted components toget
     trigger: "有人提起第十三个故事",
     action: "对着天花板挥一次手",
   });
+  for (const [i, client] of clients.entries())
+    store.act(code, client.playerId, "task", {
+      type: "secret",
+      trigger: `有人提起第${i + 1}场演唱会`,
+      action: `喊出数字${i + 1}三次`,
+    });
   const pool = store
     .pool(store.get(code))
     .filter((task) => task.type === "secret");
@@ -210,6 +223,200 @@ test("a full mixed room remixes enabled built-ins and submitted components toget
       ),
     );
   }
+  for (const client of clients) {
+    const hand = store.get(code).assignments[client.playerId].secret;
+    for (const own of pool.filter(
+      (task) => task.authorId === client.playerId,
+    )) {
+      assert.notEqual(hand.trigger, own.trigger);
+      assert.notEqual(hand.action, own.action);
+    }
+  }
+});
+
+test("ordinary secret and mixed rounds never deal a complete submission to its author", () => {
+  for (const mode of ["secret", "mixed"]) {
+    const { store, host, peer, code, ready } = setup(mode, false);
+    for (const [i, client] of [host, peer].entries()) {
+      store.act(code, client.playerId, "task", {
+        type: "secret",
+        trigger: `有人提起故事${i}`,
+        action: `念出台词${i}`,
+      });
+      if (mode === "mixed")
+        store.act(code, client.playerId, "task", {
+          type: "taboo",
+          trigger: `本人说出水果${i}`,
+        });
+    }
+    ready();
+    store.act(code, host.playerId, "start");
+    const room = store.get(code);
+    assert.equal(
+      room.assignments[host.playerId].secret.authorId,
+      peer.playerId,
+    );
+    assert.equal(
+      room.assignments[peer.playerId].secret.authorId,
+      host.playerId,
+    );
+    if (mode === "mixed") {
+      assert.equal(
+        room.assignments[host.playerId].taboo.authorId,
+        peer.playerId,
+      );
+      assert.equal(
+        room.assignments[peer.playerId].taboo.authorId,
+        host.playerId,
+      );
+    }
+  }
+});
+
+test("own-only secret pool blocks atomically; changing the pool invalidates the start hint", () => {
+  const { store, host, code, ready } = setup("secret", false);
+  for (let i = 0; i < 2; i++)
+    store.act(code, host.playerId, "task", {
+      type: "secret",
+      trigger: `有人打开盒子${i}`,
+      action: `模仿动物${i}`,
+    });
+  ready();
+  const before = structuredClone(store.get(code));
+  assert.match(store.snapshot(code, host.playerId).startIssue, /避开本人投稿/);
+  assert.throws(() => store.act(code, host.playerId, "start"), /避开本人投稿/);
+  assert.deepEqual(store.get(code), before);
+  store.act(code, host.playerId, "settings", { builtins: true });
+  ready();
+  assert.equal(store.snapshot(code, host.playerId).startIssue, null);
+  store.act(code, host.playerId, "start");
+  assert.notEqual(
+    store.get(code).assignments[host.playerId].secret.authorId,
+    host.playerId,
+  );
+});
+
+test("two authored ingredients cannot be remixed back to either writer; a third player makes it possible", () => {
+  const { store, host, peer, code, ready } = setup("secret", false);
+  for (const [i, client] of [host, peer].entries())
+    store.act(code, client.playerId, "task", {
+      type: "secret",
+      trigger: `有人提起旅行${i}`,
+      action: `模仿交通工具${i}`,
+    });
+  store.act(code, host.playerId, "settings", { remixSecrets: true });
+  ready();
+  const before = structuredClone(store.get(code));
+  assert.match(store.snapshot(code, host.playerId).startIssue, /避开本人投稿/);
+  assert.throws(() => store.act(code, host.playerId, "start"), /避开本人投稿/);
+  assert.deepEqual(store.get(code), before);
+  const third = store.join(code, input("第三位"));
+  store.act(code, third.playerId, "task", {
+    type: "secret",
+    trigger: "有人提起旅行2",
+    action: "模仿交通工具2",
+  });
+  const clients = [host, peer, third];
+  for (const client of clients)
+    store.act(code, client.playerId, "ready", { ready: true });
+  assert.equal(store.snapshot(code, host.playerId).startIssue, null);
+  store.act(code, host.playerId, "start");
+  const room = store.get(code);
+  for (const client of clients) {
+    const hand = store.snapshot(code, client.playerId).hand.secret;
+    const own = room.tasks.find((task) => task.authorId === client.playerId);
+    assert.notEqual(hand.trigger, own.trigger);
+    assert.notEqual(hand.action, own.action);
+    assert.ok(!room.tasks.some((task) => pair(task) === pair(hand)));
+    assert.deepEqual(Object.keys(hand).sort(), ["action", "trigger", "type"]);
+  }
+});
+
+test("shared ingredient wording cannot bypass author avoidance through another submission or built-in", () => {
+  const players = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  const pool = [
+    { ...secret("1", "共同条件", "共同后果"), authorId: "a" },
+    { ...secret("2", "共同条件！", "后果二"), authorId: "b" },
+    { ...secret("3", "条件三", "共同后果。"), authorId: "c" },
+    secret("4", "共同条件", "后果四"),
+    secret("5", "条件五", "共同后果"),
+    secret("6", "条件六", "后果六"),
+  ];
+  const before = structuredClone(pool);
+  const clean = (value) => value.replace(/[！。]/g, "");
+  for (let round = 0; round < 20; round++) {
+    const hands = remixSecrets(players, pool);
+    for (const player of players) {
+      for (const own of pool.filter((task) => task.authorId === player.id)) {
+        assert.notEqual(clean(hands[player.id].trigger), clean(own.trigger));
+        assert.notEqual(clean(hands[player.id].action), clean(own.action));
+      }
+    }
+  }
+  assert.deepEqual(pool, before);
+});
+
+test("joint remix allocation agrees with exhaustive small deals instead of rejecting an unlucky first pairing", () => {
+  const players = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  let seed = 42;
+  const random = (max) => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return Math.floor((seed / 4294967296) * max);
+  };
+  let possible = 0,
+    impossible = 0;
+  for (let sample = 0; sample < 100; sample++) {
+    const pool = Array.from({ length: 3 + random(3) }, (_, i) => ({
+      ...secret(String(i), `条件${random(4)}`, `后果${random(4)}`),
+      authorId: [undefined, "a", "b", "c"][random(4)],
+    }));
+    const originals = new Set(pool.map(pair));
+    // Small reference oracle enumerates actual fragment occurrences, without grouping or pruning.
+    const enumerate = (index, triggers, actions, pairs) => {
+      if (index === players.length) return true;
+      const own = pool.filter((task) => task.authorId === players[index].id);
+      for (let t = 0; t < pool.length; t++) {
+        if (
+          triggers.includes(t) ||
+          own.some((task) => task.trigger === pool[t].trigger)
+        )
+          continue;
+        for (let a = 0; a < pool.length; a++) {
+          if (
+            actions.includes(a) ||
+            own.some((task) => task.action === pool[a].action)
+          )
+            continue;
+          const value = pair({
+            trigger: pool[t].trigger,
+            action: pool[a].action,
+          });
+          if (originals.has(value) || pairs.includes(value)) continue;
+          if (
+            enumerate(
+              index + 1,
+              [...triggers, t],
+              [...actions, a],
+              [...pairs, value],
+            )
+          )
+            return true;
+        }
+      }
+      return false;
+    };
+    if (enumerate(0, [], [], [])) {
+      possible++;
+      assert.equal(
+        Object.keys(remixSecrets(players, pool)).length,
+        players.length,
+      );
+    } else {
+      impossible++;
+      assert.throws(() => remixSecrets(players, pool), /不足以重组/);
+    }
+  }
+  assert.ok(possible > 0 && impossible > 0);
 });
 
 test("remix setting and actual new pairs survive reload; old room files default to off", () => {

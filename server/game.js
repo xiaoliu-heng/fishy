@@ -55,11 +55,7 @@ export function assign(players, pool, type) {
   const owner = new Map();
   const visit = (player, seen) => {
     for (const card of cards) {
-      if (
-        seen.has(card.id) ||
-        (type === "taboo" && card.authorId === player.id)
-      )
-        continue;
+      if (seen.has(card.id) || card.authorId === player.id) continue;
       seen.add(card.id);
       if (!owner.has(card.id) || visit(owner.get(card.id), seen)) {
         owner.set(card.id, player);
@@ -73,7 +69,7 @@ export function assign(players, pool, type) {
       visit(player, new Set()),
       type === "taboo"
         ? "隐藏禁忌不足，或无法避开本人投稿。请再加几道题，或开启内置题库。"
-        : "秘密任务不足，请添加题目或开启内置题库。",
+        : "秘密任务不足，或无法避开本人投稿。请让其他玩家补题，或开启内置题库。",
     );
   }
   return Object.fromEntries(
@@ -90,20 +86,28 @@ const fragmentKey = (text) =>
     .replace(/[\p{P}\p{Z}\s]/gu, "")
     .toLowerCase();
 
-// A capacity-limited matching uses each submitted fragment at most once.
-// Pair edges have capacity 1: repeated wording cannot produce duplicate cards.
-// Reverse edges let the search repair an earlier choice instead of retrying randomly.
-export function remixSecrets(pool, count) {
+// Choose the recipient and both fragments together. Drawing anonymous pairs first
+// can fail author avoidance even when another valid combination exists.
+export function remixSecrets(players, pool) {
   const tasks = pool.filter((task) => task.type === "secret");
   const issue =
-    "条件或后果不足以重组出每人一张新题。请补充不同的条件和后果、开启内置题库，或关闭随机重组。";
-  assert(tasks.length >= count, issue);
+    "条件或后果不足以重组出每人一张且避开本人投稿的新题。请让其他玩家补充不同的条件和后果、开启内置题库，或关闭随机重组。";
+  assert(tasks.length >= players.length, issue);
   const groups = (field) => {
     const result = new Map();
     for (const task of shuffled(tasks)) {
       const key = fragmentKey(task[field]);
-      if (!result.has(key)) result.set(key, { key, fragments: [] });
-      result.get(key).fragments.push(task[field]);
+      if (!result.has(key))
+        result.set(key, {
+          key,
+          fragments: [],
+          authors: new Set(),
+          remaining: 0,
+        });
+      const group = result.get(key);
+      group.fragments.push(task[field]);
+      group.remaining++;
+      if (task.authorId) group.authors.add(task.authorId);
     }
     return shuffled([...result.values()]);
   };
@@ -114,64 +118,116 @@ export function remixSecrets(pool, count) {
       JSON.stringify([fragmentKey(task.trigger), fragmentKey(task.action)]),
     ),
   );
-  const actionOffset = 1 + triggers.length;
-  const sink = actionOffset + actions.length;
-  const graph = Array.from({ length: sink + 1 }, () => []);
-  const connect = (from, to, capacity) => {
-    const edge = { to, capacity, reverse: graph[to].length };
-    graph[from].push(edge);
-    graph[to].push({ to: from, capacity: 0, reverse: graph[from].length - 1 });
-    return edge;
-  };
-  triggers.forEach((group, i) => connect(0, i + 1, group.fragments.length));
-  actions.forEach((group, i) =>
-    connect(actionOffset + i, sink, group.fragments.length),
-  );
   const pairs = [];
-  triggers.forEach((trigger, i) => {
-    actions.forEach((action, j) => {
+  for (const trigger of triggers)
+    for (const action of actions)
       if (!originals.has(JSON.stringify([trigger.key, action.key])))
-        pairs.push({
-          trigger,
-          action,
-          edge: connect(i + 1, actionOffset + j, 1),
-        });
-    });
-  });
-  for (let dealt = 0; dealt < count; dealt++) {
-    const previous = new Map([[0, null]]),
-      queue = [0];
-    for (let i = 0; i < queue.length && !previous.has(sink); i++) {
-      const from = queue[i];
-      for (const edge of graph[from]) {
-        if (edge.capacity && !previous.has(edge.to)) {
-          previous.set(edge.to, { from, edge });
-          queue.push(edge.to);
+        pairs.push({ id: pairs.length, trigger, action });
+  const randomPairs = shuffled(pairs);
+  const entries = shuffled(players).map((player, index) => ({
+    player,
+    bit: 1 << index,
+    // Equal wording from another author or a built-in is still known to its writer.
+    candidates: randomPairs.filter(
+      ({ trigger, action }) =>
+        !trigger.authors.has(player.id) && !action.authors.has(player.id),
+    ),
+  }));
+  const used = new Set(),
+    chosen = new Map(),
+    failed = new Set();
+  const available = (pair) =>
+    pair.trigger.remaining > 0 &&
+    pair.action.remaining > 0 &&
+    !used.has(pair.id);
+
+  // Prune shortages shared by several players before trying individual pairs.
+  const canCover = (options, field) => {
+    const owners = new Map();
+    const visit = (option, seen) => {
+      for (const group of option[field]) {
+        if (seen.has(group)) continue;
+        seen.add(group);
+        const assigned = owners.get(group) || [];
+        if (assigned.length < group.remaining) {
+          assigned.push(option);
+          owners.set(group, assigned);
+          return true;
+        }
+        for (let i = 0; i < assigned.length; i++) {
+          if (visit(assigned[i], seen)) {
+            assigned[i] = option;
+            return true;
+          }
         }
       }
+      return false;
+    };
+    return options.every((option) => visit(option, new Set()));
+  };
+  const search = (pending) => {
+    if (!pending) return true;
+    const key = `${pending}:${[...used].sort((a, b) => a - b).join(",")}`;
+    if (failed.has(key)) return false;
+    const options = [],
+      remainingPairs = new Set();
+    for (const entry of entries) {
+      if (!(pending & entry.bit)) continue;
+      const option = { entry, count: 0, trigger: new Set(), action: new Set() };
+      for (const pair of entry.candidates) {
+        if (!available(pair)) continue;
+        option.count++;
+        option.trigger.add(pair.trigger);
+        option.action.add(pair.action);
+        if (remainingPairs.size < players.length) remainingPairs.add(pair.id);
+      }
+      if (!option.count) return false;
+      options.push(option);
     }
-    assert(previous.has(sink), issue);
-    for (let node = sink; node !== 0;) {
-      const { from, edge } = previous.get(node);
-      edge.capacity--;
-      graph[node][edge.reverse].capacity++;
-      node = from;
+    if (
+      remainingPairs.size < options.length ||
+      !canCover(options, "trigger") ||
+      !canCover(options, "action")
+    )
+      return false;
+    options.sort((a, b) => a.count - b.count);
+    const { entry } = options[0];
+    for (const pair of entry.candidates) {
+      if (!available(pair)) continue;
+      used.add(pair.id);
+      pair.trigger.remaining--;
+      pair.action.remaining--;
+      chosen.set(entry.player.id, pair);
+      if (search(pending ^ entry.bit)) return true;
+      chosen.delete(entry.player.id);
+      pair.trigger.remaining++;
+      pair.action.remaining++;
+      used.delete(pair.id);
     }
-  }
-  return pairs
-    .filter(({ edge }) => edge.capacity === 0)
-    .map(({ trigger, action }) => ({
-      id: randomUUID(),
-      type: "secret",
-      trigger: trigger.fragments.pop(),
-      action: action.fragments.pop(),
-    }));
+    // Keep the cache bounded without limiting the completeness of the search.
+    if (failed.size < 5000) failed.add(key);
+    return false;
+  };
+  assert(search((1 << players.length) - 1), issue);
+  return Object.fromEntries(
+    [...chosen].map(([playerId, { trigger, action }]) => [
+      playerId,
+      {
+        id: randomUUID(),
+        type: "secret",
+        trigger: trigger.fragments.pop(),
+        action: action.fragments.pop(),
+      },
+    ]),
+  );
 }
 
 export class GameStore {
   constructor(path = null) {
     this.path = path;
     this.rooms = new Map();
+    // Each committed write replaces the room object; viewers can share its feasibility result.
+    this.startIssues = new WeakMap();
     if (path) {
       mkdirSync(dirname(path), { recursive: true });
       try {
@@ -317,22 +373,24 @@ export class GameStore {
     const pool = this.pool(room);
     const assignments = Object.fromEntries(players.map((p) => [p.id, {}]));
     for (const type of typesFor(room.mode)) {
-      const cards =
+      const assigned =
         type === "secret" && room.remixSecrets
-          ? remixSecrets(pool, players.length)
-          : pool;
-      const assigned = assign(players, cards, type);
+          ? remixSecrets(players, pool)
+          : assign(players, pool, type);
       for (const p of players) assignments[p.id][type] = assigned[p.id];
     }
     return assignments;
   }
   startIssue(room) {
+    if (this.startIssues.has(room)) return this.startIssues.get(room);
+    let issue = null;
     try {
       this.planRound(room);
     } catch (e) {
-      return e.message;
+      issue = e.message;
     }
-    return null;
+    this.startIssues.set(room, issue);
+    return issue;
   }
   act(code, playerId, action, input = {}) {
     const room = structuredClone(this.get(code));
